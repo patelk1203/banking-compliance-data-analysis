@@ -46,22 +46,22 @@ print(f"Total monthly revenue: ${final_population['total_revenue'].sum():,.2f}")
 
 print("\n--- TASK 2: Refined Revenue Impact ---")
 
-# 1. Keep only regulated cards (Join on card_id instead of customer_id)
+# Keep only regulated cards (Join on card_id instead of customer_id)
 regulated_cards = pd.merge(user_data, latest_occupation[['card_id']], on='card_id', how='inner')
 
-# 2. Identify customers with more than one regulated card
+# Identify customers with more than one regulated card
 card_counts = regulated_cards.groupby('customer_id').size().reset_index(name='n_cards')
 multi_card_users = card_counts[card_counts['n_cards'] > 1]
 
-# 3. Filter the main dataset to only include these multi-card users
+# Filter the main dataset to only include these multi-card users
 multi_card_data = pd.merge(regulated_cards, multi_card_users[['customer_id']], on='customer_id', how='inner')
 
-# 4. Rank cards by revenue descending (and card_id ascending to break ties)
+# Rank cards by revenue descending (and card_id ascending to break ties)
 multi_card_data = multi_card_data.sort_values(['customer_id', 'total_revenue', 'card_id'], ascending=[True, False, True])
 # Create a rank column (equivalent to ROW_NUMBER in SQL)
 multi_card_data['revenue_rank'] = multi_card_data.groupby('customer_id').cumcount() + 1
 
-# 5. Impacted cards are everything except rank 1 (the highest revenue card they keep)
+# Impacted cards are everything except rank 1 (the highest revenue card they keep)
 impacted_cards = multi_card_data[multi_card_data['revenue_rank'] > 1]
 
 # Final Output
@@ -118,3 +118,57 @@ for name, table in tables.items():
     table.to_csv(file_path, index=False)
     
 print(f"Success! All 6 deliverables have been exported to the '{export_dir}/' folder.")
+
+print("\n--- TASK 4: Profession-Based Segmentation (10 vs 20) ---")
+
+# Define the 10 and 20 profession lists
+PROF_10 = ['PLUMBER', 'MECHANIC', 'CONSTRUCTION WORKER', 'MARKETING SPECIALIST', 
+           'SECURITY GUARD', 'TAXI DRIVER', 'DATA ANALYST', 'NURSE', 'DRIVER', 'WELDER']
+PROF_20 = [occ for occ in RESTRICTED_OCCUPATIONS if occ not in PROF_10]
+
+# Identify which cards belong to which group based on the latest occupation table from Task 1
+cards_10 = latest_occupation[latest_occupation['clean_occ'].isin(PROF_10)]['card_id'].unique()
+cards_20 = latest_occupation[latest_occupation['clean_occ'].isin(PROF_20)]['card_id'].unique()
+
+# Add flags to both existing demographic datasets
+overall_data['is_10_prof'] = overall_data['card_id'].isin(cards_10)
+overall_data['is_20_prof'] = overall_data['card_id'].isin(cards_20)
+
+impacted_full['is_10_prof'] = impacted_full['card_id'].isin(cards_10)
+impacted_full['is_20_prof'] = impacted_full['card_id'].isin(cards_20)
+
+# Define an extended aggregation function that calculates the subsets
+def aggregate_extended(df, group_col, prefix):
+    res = df.groupby(group_col, observed=False).agg(
+        lines=('card_id', 'nunique'),
+        revenue=('total_revenue', 'sum'),
+        prof10_lines=('card_id', lambda s: s[df.loc[s.index, 'is_10_prof']].nunique()),
+        prof10_revenue=('total_revenue', lambda s: s[df.loc[s.index, 'is_10_prof']].sum()),
+        prof20_lines=('card_id', lambda s: s[df.loc[s.index, 'is_20_prof']].nunique()),
+        prof20_revenue=('total_revenue', lambda s: s[df.loc[s.index, 'is_20_prof']].sum())
+    ).reset_index()
+    
+    return res.rename(columns={
+        'lines': f'{prefix}_lines', 
+        'revenue': f'{prefix}_revenue',
+        'prof10_lines': f'{prefix}_prof10_lines',
+        'prof10_revenue': f'{prefix}_prof10_revenue',
+        'prof20_lines': f'{prefix}_prof20_lines',
+        'prof20_revenue': f'{prefix}_prof20_revenue'
+    })
+
+# Re-generate and overwrite the 6 tables with the new columns
+tables_v2 = {
+    "overall_by_revenue": aggregate_extended(overall_data, 'revenue_group', 'overall'),
+    "impacted_by_revenue": aggregate_extended(impacted_full, 'revenue_group', 'impacted'),
+    "overall_by_tenure": aggregate_extended(overall_data, 'tenure_bucket', 'overall'),
+    "impacted_by_tenure": aggregate_extended(impacted_full, 'tenure_bucket', 'impacted'),
+    "overall_by_nationality": aggregate_extended(overall_data, 'nationality', 'overall').sort_values('overall_revenue', ascending=False),
+    "impacted_by_nationality": aggregate_extended(impacted_full, 'nationality', 'impacted').sort_values('impacted_revenue', ascending=False)
+}
+
+for name, table in tables_v2.items():
+    file_path = os.path.join(export_dir, f"{name}.csv")
+    table.to_csv(file_path, index=False)
+
+print("Success! Task 4 deliverables have been generated and exported. The project is complete.")
